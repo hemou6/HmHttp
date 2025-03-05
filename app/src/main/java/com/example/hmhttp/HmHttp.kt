@@ -1,23 +1,43 @@
 package com.example.hmhttp
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.PrintWriter
 import java.net.Socket
 import java.net.URL
+import java.nio.charset.Charset
+import java.util.zip.GZIPInputStream
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
 
 class HmHttpClient {
-    fun newCall(request:Request){
-
+    fun newCall(request:Request):RealCall{
+        return RealCall(request)
     }
-    fun sendRequest(request: Request):Response{
+
+}
+
+class RealCall(val request: Request){
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    fun execute():Response{
+        if (request.url.contains(Regex("\\{\\w+\\}"))) {
+            throw IllegalArgumentException("Missing path parameters in URL: ${request.url}")
+        }
+
         val urlObj=URL(request.url)
+        println("url ${urlObj}")
         val host=urlObj.host
-        val port=if(urlObj.protocol=="https")443 else 80 //https的默认端口是443，http的是80
+        println("port ${urlObj.port}")
+
+        val port=if(urlObj.port!=-1)urlObj.port
+        else if(urlObj.protocol=="https")443
+        else 80                              //https的默认端口是443，http的是80
         val path=if(urlObj.path.isEmpty()) "/" else urlObj.path
 
         //HTTP1.1 默认保持连接 reader.readLine()会阻塞读取直到流关闭，所以要主动关闭流
@@ -32,7 +52,7 @@ class HmHttpClient {
         socket.soTimeout=5000
         socket.use{
             val writer=PrintWriter(socket.getOutputStream(),true)
-            val reader=BufferedReader(InputStreamReader(socket.getInputStream()))
+            val input=socket.getInputStream()
 
             val fullPath=if(path.startsWith("/"))path else "/$path"
             //发送请求行
@@ -41,50 +61,60 @@ class HmHttpClient {
             writer.println("Host: $host")
             request.headers.forEach{(key,value)->writer.println("$key: $value")}
             writer.println()
+            request.body?.writeTo(writer)
+            writer.flush()
 
+            val bufferedReader=input.buffered()
             //读取状态行
-            val statusLine=reader.readLine()?: throw IOException("No response")
-            val statusCode=statusLine.split(" ")[1].toInt()
+            val statusLine = readLineFromStream(bufferedReader) // 自定义方法读取字节流中的行
+            val statusCode = statusLine.split(" ")[1].toInt()
 
             val headers= mutableMapOf<String,MutableList<String>>()
-            val body=StringBuilder()
-            var line:String?=null
+            var line:String
             //读取响应头
-            while(reader.readLine().also { line=it }?.isNotEmpty()==true){
-                val (key,value )=line!!.split(':', limit = 2).map { it.trim() }
-                headers.getOrPut(key){ mutableListOf() }.add(value)
+            do {
+                line = readLineFromStream(bufferedReader)
+                if (line.isNotEmpty()) {
+                    val (key, value) = line.split(':', limit = 2).map { it.trim() }
+                    headers.getOrPut(key) { mutableListOf() }.add(value)
+                }
+            } while (line.isNotEmpty())
+
+
+            val contentEncoding=headers["Content-Encoding"]?.firstOrNull()
+            val inputStreamDecoder=when(contentEncoding){
+                "gzip"->GZIPInputStream(bufferedReader)
+                else->bufferedReader
+            }
+            //获取字符集
+            val contentType=headers["Content-Type"]?.firstOrNull()?:""
+            val charsetName=if(contentType.contains("charset=")){
+                contentType.split("charset=")[1].split(";")[0].trim()
+            }else "UTF-8"
+
+            val charset=try {
+                Charset.forName(charsetName)
+            }catch (e:Exception){
+                Charsets.UTF_8
             }
             //读取响应体
-            while (reader.readLine().also { line=it }?.isNotEmpty()!=null){
-                body.append(line).append('\n')
-            }
+            val bodyBytes=inputStreamDecoder.readBytes()
+            val body=bodyBytes.toString(charset)
 
-            return Response(statusCode,headers,body.toString())
+            return Response(statusCode,headers,body)
         }
     }
-}
-class Request internal constructor(build: Build){
-    val url:String= checkNotNull(build.url){"url==null"}
-    val method:String=build.method
-    val headers:MutableMap<String,String> =build.headers
-
-
-    open class Build{
-        internal var url:String?=null
-        internal var method:String
-        internal var headers:MutableMap<String,String>
-        constructor(){
-            method="GET"
-            headers= mutableMapOf<String,String>()
+    /** 从字节流中按行读取（兼容不同换行符） */
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun readLineFromStream(input: InputStream): String {
+        val buffer = ByteArrayOutputStream()
+        var b: Int
+        while (true) {
+            b = input.read()
+            if (b == -1 || b == '\n'.code) break
+            if (b != '\r'.code) buffer.write(b)
         }
-        open fun url(url:String):Build=apply { this.url=url }
-        open fun method(method:String):Build=apply { this.method=method }
-        open fun header(name:String,value:String):Build=apply { this.headers[name]=value}
-        open fun build():Request=Request(this)
+        return buffer.toString(Charsets.ISO_8859_1)
     }
 }
-data class Response(
-    val statusCode:Int,
-    val headers:Map<String,List<String>>,
-    val body:String,
-)
+
