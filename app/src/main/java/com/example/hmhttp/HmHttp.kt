@@ -56,7 +56,7 @@ class RealCall(val request: Request){
 
             val fullPath=if(path.startsWith("/"))path else "/$path"
             //发送请求行
-            writer.println("${request.method} $fullPath HTTP/1.1")
+            writer.println("${request.method} $fullPath?${urlObj.query} HTTP/1.1")
             //发送请求头
             writer.println("Host: $host")
             request.headers.forEach{(key,value)->writer.println("$key: $value")}

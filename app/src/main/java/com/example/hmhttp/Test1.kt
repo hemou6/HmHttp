@@ -10,11 +10,9 @@ fun main(){
         .add("Path",1)
         .build()
     val request = Request.Builder()
-        .url("http://123.56.29.69:8080/common/test/{num}")
-        .method("POST")
-        .path("num","1")
+        .url("http://shanhe.kim/api/youxi/wzyyb.php")
+        .query("msg","花木兰")
         .build()
     val response = HmHttpClient().newCall(request).execute()
     println("response ${response.body}")
-
 }

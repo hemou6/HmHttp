@@ -1,11 +1,8 @@
 package com.example.hmhttp
 
 import com.google.gson.Gson
-import com.google.gson.JsonObject
-import java.io.OutputStream
-import java.io.OutputStreamWriter
-import java.io.PrintStream
 import java.io.PrintWriter
+import java.net.URLEncoder
 
 
 class Request internal constructor(build: Builder){
@@ -20,6 +17,7 @@ class Request internal constructor(build: Builder){
         internal var headers:MutableMap<String,String>
         internal var body:RequestBody?=null
         internal val pathParam= mutableMapOf<String,String>()
+        internal val queryParams= mutableMapOf<String,Any>()
         constructor(){
             method="GET"
             headers= mutableMapOf<String,String>("Content-Type" to "application/json; charset=utf-8")
@@ -30,7 +28,15 @@ class Request internal constructor(build: Builder){
 
         fun header(name:String,value:String):Builder=apply { this.headers[name]=value}
 
-        fun path(key:String,value: String):Builder=apply { this.pathParam[key]=value }
+        fun path(name:String,value: String):Builder=apply { this.pathParam[name]=value }
+
+        fun query(name: String,value: Any):Builder=apply {
+            when(val current=queryParams[name]){
+                null->queryParams[name]=value
+                is Collection<*>->queryParams[name]=current+value
+                else ->queryParams[name]= listOf(current,value)
+            }
+        }
 
         fun post(body:RequestBody):Builder=apply{
             method="POST"
@@ -48,6 +54,24 @@ class Request internal constructor(build: Builder){
             pathParam.forEach{(key,value)->
                 url=url?.replace("{$key}",value)
             }
+
+            if (queryParams.isEmpty()) return
+
+            val baseUrl = if (url!!.contains("?")) url else "$url?"
+            val encodedParams = queryParams.flatMap { (key, value) ->
+                when (value) {
+                    is Collection<*> -> value.map { Pair(key, it.toString()) }
+                    else -> listOf(Pair(key, value.toString()))
+                }
+            }.joinToString("&") { (k, v) ->
+                "${encode(k)}=${encode(v)}"
+            }
+
+            url="$baseUrl$encodedParams"
+        }
+        private fun encode(str: String): String {
+            return URLEncoder.encode(str, "UTF-8")
+                .replace("+", "%20") // 更规范的编码替换
         }
     }
 }
