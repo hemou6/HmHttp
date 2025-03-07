@@ -86,6 +86,8 @@ class RealCall(val request: Request){
                 "gzip"->GZIPInputStream(bufferedReader)
                 else->bufferedReader
             }
+            val transferEncoding = headers["Transfer-Encoding"]?.firstOrNull()
+            val isChunked = transferEncoding?.contains("chunked") == true
             //获取字符集
             val contentType=headers["Content-Type"]?.firstOrNull()?:""
             val charsetName=if(contentType.contains("charset=")){
@@ -97,9 +99,28 @@ class RealCall(val request: Request){
             }catch (e:Exception){
                 Charsets.UTF_8
             }
-            //读取响应体
-            val bodyBytes=inputStreamDecoder.readBytes()
-            val body=bodyBytes.toString(charset)
+
+            // 新增分块编码处理
+            val body = if (isChunked) {
+                val buffer = ByteArrayOutputStream()
+                val chunkedReader = BufferedReader(InputStreamReader(inputStreamDecoder, charset))
+
+                while (true) {
+                    val chunkSizeLine = chunkedReader.readLine()?.trim() ?: break
+                    val chunkSize = chunkSizeLine.toIntOrNull(16) ?: break
+                    if (chunkSize == 0) break
+
+                    val chunk = CharArray(chunkSize)
+                    val read = chunkedReader.read(chunk)
+                    buffer.write(String(chunk, 0, read).toByteArray(charset))
+
+                    // 跳过块尾部的 \r\n
+                    chunkedReader.readLine()
+                }
+                buffer.toString(charset.name())
+            } else {
+                inputStreamDecoder.readBytes().toString(charset)
+            }
 
             return Response(statusCode,headers,body)
         }
